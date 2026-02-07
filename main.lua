@@ -19,7 +19,7 @@ local SESSION_FILE = "pawfy-session.json"
 local WEBHOOK_NAME = "Paw-Webhook"
 local BOT_NAME = "Pawfy Bot Notifier"
 local AVATAR_URL = "https://raw.githubusercontent.com/pawfyproject-hub/pawfy/main/pawfy.jpg"
-local INTERVAL = 90 -- 1.5 menit
+local INTERVAL = 50 -- 1 menit
 
 -- STATE
 local webhook
