@@ -1,7 +1,7 @@
---// ==================================================
---// Pawfy Bot Notifier
---// Hybrid Popup (1x) + Multi Instance Safe
---// ==================================================
+--// =========================================
+--// Pawfy Bot Notifier - CLEAN VERSION
+--// No Instance Label | Multi Instance Safe
+--// =========================================
 
 -- Services
 local HttpService = game:GetService("HttpService")
@@ -18,23 +18,23 @@ if not request then
     return
 end
 
--- ==================================================
--- GLOBAL CONFIG (SHARED)
--- ==================================================
+-- =========================================
+-- CONFIG
+-- =========================================
 
+-- Global (shared) webhook config
 local GLOBAL_CONFIG = "pawfy-global.json"
 
--- Instance Config (UNIK PER INSTANCE)
-local INSTANCE_ID   = game.JobId
-local INSTANCE_NAME = "Instance " .. string.sub(INSTANCE_ID, 1, 6)
-local INSTANCE_CFG  = "pawfy-" .. INSTANCE_ID .. ".json"
+-- Instance-unique config (INI KUNCI MULTI INSTANCE)
+local INSTANCE_ID  = game.JobId
+local INSTANCE_CFG = "pawfy-" .. INSTANCE_ID .. ".json"
 
 -- Branding
 local AVATAR_URL = "https://raw.githubusercontent.com/pawfyproject-hub/pawfy/main/pawfy.jpg"
 local BOT_NAME   = "Paw-Webhook"
-local TITLE_NAME = "Pawfy Bot Notifier — " .. INSTANCE_NAME
+local TITLE_NAME = "Pawfy Bot Notifier"
 
--- Interval
+-- Interval (hemat CPU)
 local MIN_INTERVAL = 60
 local MAX_INTERVAL = 120
 
@@ -42,9 +42,9 @@ local START_TIME = os.time()
 local WEBHOOK_URL
 local MESSAGE_ID
 
--- ==================================================
+-- =========================================
 -- FILE UTILS
--- ==================================================
+-- =========================================
 
 local function readJSON(path)
     if isfile and isfile(path) then
@@ -61,9 +61,9 @@ local function writeJSON(path, data)
     end
 end
 
--- ==================================================
--- POPUP (ONLY IF WEBHOOK NOT SET)
--- ==================================================
+-- =========================================
+-- POPUP WEBHOOK (MUNCUL 1x SAJA)
+-- =========================================
 
 local function popupWebhook()
     local gui = Instance.new("ScreenGui")
@@ -118,9 +118,9 @@ local function popupWebhook()
     repeat task.wait() until WEBHOOK_URL
 end
 
--- ==================================================
+-- =========================================
 -- LOAD GLOBAL WEBHOOK
--- ==================================================
+-- =========================================
 
 local gcfg = readJSON(GLOBAL_CONFIG)
 if gcfg and gcfg.webhook then
@@ -129,18 +129,18 @@ else
     popupWebhook()
 end
 
--- ==================================================
+-- =========================================
 -- LOAD INSTANCE MESSAGE ID
--- ==================================================
+-- =========================================
 
 local icfg = readJSON(INSTANCE_CFG)
 if icfg and icfg.messageId then
     MESSAGE_ID = icfg.messageId
 end
 
--- ==================================================
+-- =========================================
 -- STATS
--- ==================================================
+-- =========================================
 
 local function formatTime(sec)
     return string.format("%02d:%02d:%02d", sec//3600, (sec%3600)//60, sec%60)
@@ -168,9 +168,9 @@ local function box(v)
     return "```"..tostring(v).."```"
 end
 
--- ==================================================
+-- =========================================
 -- PAYLOAD
--- ==================================================
+-- =========================================
 
 local function buildPayload()
     return {
@@ -187,15 +187,18 @@ local function buildPayload()
                 { name="Ping", value=box(getPing()), inline=true },
                 { name="Executor", value=box(getExecutor()), inline=true },
             },
-            footer = { text="Pawfy Project", icon_url=AVATAR_URL },
+            footer = {
+                text = "Pawfy Project",
+                icon_url = AVATAR_URL
+            },
             timestamp = DateTime.now():ToIsoDate()
         }}
     }
 end
 
--- ==================================================
+-- =========================================
 -- WEBHOOK SEND / EDIT
--- ==================================================
+-- =========================================
 
 local function safeRequest(opt)
     local ok, res = pcall(function()
@@ -233,9 +236,9 @@ local function editWebhook()
     })
 end
 
--- ==================================================
--- LOOP
--- ==================================================
+-- =========================================
+-- MAIN LOOP (LOW CPU)
+-- =========================================
 
 task.spawn(function()
     editWebhook()
