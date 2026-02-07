@@ -1,249 +1,207 @@
---// =========================================
---// Pawfy Bot Notifier - CLEAN VERSION
---// No Instance Label | Multi Instance Safe
---// =========================================
+--// Pawfy Bot Notifier - Clean Multi Instance Final
+--// Author: Pawfy Project
 
--- Services
+-- SERVICES
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local Stats = game:GetService("Stats")
+local RunService = game:GetService("RunService")
 local StarterGui = game:GetService("StarterGui")
 
 local LocalPlayer = Players.LocalPlayer
-
--- Executor HTTP
 local request = http_request or (http and http.request) or request
-if not request then
-    warn("[Pawfy] Executor tidak mendukung http_request")
-    return
-end
 
--- =========================================
--- CONFIG
--- =========================================
+-- FILES
+local CONFIG_FILE = "pawfy-config.json"
+local SESSION_FILE = "pawfy-session.json"
 
--- Global (shared) webhook config
-local GLOBAL_CONFIG = "pawfy-global.json"
-
--- Instance-unique config (INI KUNCI MULTI INSTANCE)
-local INSTANCE_ID  = game.JobId
-local INSTANCE_CFG = "pawfy-" .. INSTANCE_ID .. ".json"
-
--- Branding
+-- CONSTANTS
+local WEBHOOK_NAME = "Paw-Webhook"
+local BOT_NAME = "Pawfy Bot Notifier"
 local AVATAR_URL = "https://raw.githubusercontent.com/pawfyproject-hub/pawfy/main/pawfy.jpg"
-local BOT_NAME   = "Paw-Webhook"
-local TITLE_NAME = "Pawfy Bot Notifier"
+local INTERVAL = 90 -- 1.5 menit
 
--- Interval (hemat CPU)
-local MIN_INTERVAL = 60
-local MAX_INTERVAL = 120
+-- STATE
+local webhook
+local messageId
+local startTime = os.time()
+local lastTick = os.clock()
 
-local START_TIME = os.time()
-local WEBHOOK_URL
-local MESSAGE_ID
+-- =========================
+-- SESSION (UNIK PER INSTANCE)
+-- =========================
+local session
+if isfile and isfile(SESSION_FILE) then
+    session = HttpService:JSONDecode(readfile(SESSION_FILE))
+else
+    session = { id = HttpService:GenerateGUID(false) }
+    writefile(SESSION_FILE, HttpService:JSONEncode(session))
+end
 
--- =========================================
--- FILE UTILS
--- =========================================
+-- =========================
+-- NOTIFY (POPUP - ONLY UI)
+-- =========================
+local function notify(t, d)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = BOT_NAME,
+            Text = t,
+            Duration = d or 4
+        })
+    end)
+end
 
-local function readJSON(path)
-    if isfile and isfile(path) then
-        local ok, data = pcall(function()
-            return HttpService:JSONDecode(readfile(path))
-        end)
-        if ok then return data end
+-- =========================
+-- CONFIG
+-- =========================
+local function loadConfig()
+    if isfile and isfile(CONFIG_FILE) then
+        return HttpService:JSONDecode(readfile(CONFIG_FILE))
     end
 end
 
-local function writeJSON(path, data)
-    if writefile then
-        writefile(path, HttpService:JSONEncode(data))
-    end
+local function saveConfig(data)
+    writefile(CONFIG_FILE, HttpService:JSONEncode(data))
 end
 
--- =========================================
--- POPUP WEBHOOK (MUNCUL 1x SAJA)
--- =========================================
+local cfg = loadConfig()
+if cfg and cfg.webhook then
+    webhook = cfg.webhook
+end
 
-local function popupWebhook()
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "Pawfy-Webhook-GUI"
-    gui.IgnoreGuiInset = true
-    gui.Parent = game.CoreGui
+-- =========================
+-- GUI INPUT WEBHOOK
+-- =========================
+if not webhook then
+    local gui = Instance.new("ScreenGui", game.CoreGui)
+    gui.Name = "PawfyWebhookGui"
 
     local frame = Instance.new("Frame", gui)
     frame.Size = UDim2.fromScale(0.45, 0.3)
     frame.Position = UDim2.fromScale(0.5, 0.5)
     frame.AnchorPoint = Vector2.new(0.5, 0.5)
-    frame.BackgroundColor3 = Color3.fromRGB(18,18,18)
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0,20)
+    frame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 20)
 
     local title = Instance.new("TextLabel", frame)
     title.Size = UDim2.fromScale(1, 0.3)
     title.BackgroundTransparency = 1
-    title.Text = "Pawfy Webhook Setup"
+    title.Text = "Pawfy Bot Notifier"
+    title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.GothamBold
     title.TextSize = 24
-    title.TextColor3 = Color3.new(1,1,1)
 
-    local input = Instance.new("TextBox", frame)
-    input.Size = UDim2.fromScale(0.9, 0.25)
-    input.Position = UDim2.fromScale(0.05, 0.38)
-    input.PlaceholderText = "Paste Discord Webhook URL"
-    input.ClearTextOnFocus = false
-    input.Font = Enum.Font.Gotham
-    input.TextSize = 16
-    input.TextColor3 = Color3.new(1,1,1)
-    input.BackgroundColor3 = Color3.fromRGB(30,30,30)
-    Instance.new("UICorner", input).CornerRadius = UDim.new(0,14)
+    local box = Instance.new("TextBox", frame)
+    box.Size = UDim2.fromScale(0.9, 0.25)
+    box.Position = UDim2.fromScale(0.05, 0.4)
+    box.PlaceholderText = "Paste Discord Webhook URL"
+    box.BackgroundColor3 = Color3.fromRGB(30,30,30)
+    box.TextColor3 = Color3.new(1,1,1)
+    box.Font = Enum.Font.Gotham
+    box.TextSize = 16
+    box.ClearTextOnFocus = false
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 14)
 
     local btn = Instance.new("TextButton", frame)
-    btn.Size = UDim2.fromScale(0.45, 0.22)
-    btn.Position = UDim2.fromScale(0.275, 0.7)
+    btn.Size = UDim2.fromScale(0.4, 0.2)
+    btn.Position = UDim2.fromScale(0.3, 0.7)
     btn.Text = "SAVE"
     btn.Font = Enum.Font.GothamBold
     btn.TextSize = 18
     btn.TextColor3 = Color3.new(1,1,1)
-    btn.BackgroundColor3 = Color3.fromRGB(0,229,255)
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0,16)
+    btn.BackgroundColor3 = Color3.fromRGB(0,200,255)
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 14)
 
     btn.MouseButton1Click:Connect(function()
-        if input.Text:find("discord.com/api/webhooks") then
-            WEBHOOK_URL = input.Text
-            writeJSON(GLOBAL_CONFIG, { webhook = WEBHOOK_URL })
+        if box.Text:find("discord.com/api/webhooks") then
+            webhook = box.Text
+            saveConfig({ webhook = webhook })
+            notify("Webhook saved", 3)
             gui:Destroy()
         end
     end)
 
-    repeat task.wait() until WEBHOOK_URL
+    repeat task.wait() until webhook
 end
 
--- =========================================
--- LOAD GLOBAL WEBHOOK
--- =========================================
-
-local gcfg = readJSON(GLOBAL_CONFIG)
-if gcfg and gcfg.webhook then
-    WEBHOOK_URL = gcfg.webhook
-else
-    popupWebhook()
-end
-
--- =========================================
--- LOAD INSTANCE MESSAGE ID
--- =========================================
-
-local icfg = readJSON(INSTANCE_CFG)
-if icfg and icfg.messageId then
-    MESSAGE_ID = icfg.messageId
-end
-
--- =========================================
+-- =========================
 -- STATS
--- =========================================
-
-local function formatTime(sec)
-    return string.format("%02d:%02d:%02d", sec//3600, (sec%3600)//60, sec%60)
+-- =========================
+local function uptime()
+    local s = os.time() - startTime
+    return string.format("%02d:%02d:%02d", s//3600, (s%3600)//60, s%60)
 end
 
-local function getPing()
+local function ping()
     local p = Stats.Network.ServerStatsItem["Data Ping"]
-    return p and math.floor(p:GetValue()).." ms" or "N/A"
+    return p and math.floor(p:GetValue()) .. " ms" or "N/A"
 end
 
-local function getMemory()
+local function mem()
     return string.format("%.2f MB", Stats:GetTotalMemoryUsageMb())
 end
 
-local function getCPU()
-    local cpu = Stats.PerformanceStats and Stats.PerformanceStats:FindFirstChild("CPU")
-    return cpu and string.format("%.2f ms", cpu:GetValue()) or "N/A"
+local function cpu()
+    local c = Stats.PerformanceStats and Stats.PerformanceStats:FindFirstChild("CPU")
+    return c and string.format("%.2f ms", c:GetValue()) or "N/A"
 end
 
-local function getExecutor()
-    return identifyexecutor and identifyexecutor() or "Unknown"
-end
-
-local function box(v)
-    return "```"..tostring(v).."```"
-end
-
--- =========================================
+-- =========================
 -- PAYLOAD
--- =========================================
-
-local function buildPayload()
+-- =========================
+local function payload()
     return {
-        username = BOT_NAME,
+        username = WEBHOOK_NAME,
         avatar_url = AVATAR_URL,
         embeds = {{
-            title = TITLE_NAME,
+            title = BOT_NAME,
             color = 0x00E5FF,
             fields = {
-                { name="Username", value=box(LocalPlayer.Name), inline=true },
-                { name="Uptime", value=box(formatTime(os.time()-START_TIME)), inline=true },
-                { name="Memory", value=box(getMemory()), inline=true },
-                { name="CPU", value=box(getCPU()), inline=true },
-                { name="Ping", value=box(getPing()), inline=true },
-                { name="Executor", value=box(getExecutor()), inline=true },
+                { name = "User", value = LocalPlayer.Name, inline = true },
+                { name = "Uptime", value = uptime(), inline = true },
+                { name = "Memory", value = mem(), inline = true },
+                { name = "CPU", value = cpu(), inline = true },
+                { name = "Ping", value = ping(), inline = true }
             },
-            footer = {
-                text = "Pawfy Project",
-                icon_url = AVATAR_URL
-            },
+            footer = { text = "Pawfy Project" },
             timestamp = DateTime.now():ToIsoDate()
         }}
     }
 end
 
--- =========================================
+-- =========================
 -- WEBHOOK SEND / EDIT
--- =========================================
-
-local function safeRequest(opt)
-    local ok, res = pcall(function()
-        return request(opt)
-    end)
-    return ok and res or nil
-end
-
-local function sendWebhook()
-    local res = safeRequest({
-        Url = WEBHOOK_URL .. "?wait=true",
+-- =========================
+local function send()
+    local r = request({
+        Url = webhook .. "?wait=true",
         Method = "POST",
-        Headers = { ["Content-Type"]="application/json" },
-        Body = HttpService:JSONEncode(buildPayload())
+        Headers = {["Content-Type"]="application/json"},
+        Body = HttpService:JSONEncode(payload())
     })
-
-    if res and res.Body then
-        local body = HttpService:JSONDecode(res.Body)
-        MESSAGE_ID = body.id
-        writeJSON(INSTANCE_CFG, { messageId = MESSAGE_ID })
+    if r and r.Body then
+        messageId = HttpService:JSONDecode(r.Body).id
     end
 end
 
-local function editWebhook()
-    if not MESSAGE_ID then
-        sendWebhook()
-        return
-    end
-
-    safeRequest({
-        Url = WEBHOOK_URL .. "/messages/" .. MESSAGE_ID,
+local function edit()
+    if not messageId then return end
+    request({
+        Url = webhook .. "/messages/" .. messageId,
         Method = "PATCH",
-        Headers = { ["Content-Type"]="application/json" },
-        Body = HttpService:JSONEncode(buildPayload())
+        Headers = {["Content-Type"]="application/json"},
+        Body = HttpService:JSONEncode(payload())
     })
 end
 
--- =========================================
--- MAIN LOOP (LOW CPU)
--- =========================================
+-- =========================
+-- INIT
+-- =========================
+send()
 
-task.spawn(function()
-    editWebhook()
-    while true do
-        task.wait(math.random(MIN_INTERVAL, MAX_INTERVAL))
-        editWebhook()
+RunService.Heartbeat:Connect(function()
+    if os.clock() - lastTick >= INTERVAL then
+        lastTick = os.clock()
+        edit()
     end
 end)
