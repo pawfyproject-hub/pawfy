@@ -1,9 +1,14 @@
---// PAWFY FARM MODE v2.5 (GLOBAL + HEALTH)
+--// PAWFY FARM MODE v3.1 STABLE LOCK
 pcall(function()
 
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local task = task
+
+--------------------------------------------------
+-- CONFIG & PLAYER
+--------------------------------------------------
 
 if not isfile("pawfy-config.json") then return end
 local WEBHOOK_URL = HttpService:JSONDecode(readfile("pawfy-config.json")).webhook
@@ -17,14 +22,14 @@ if not player then return end
 local USERNAME = player.Name
 
 --------------------------------------------------
--- OPTIMIZER
+-- ULTRA OPTIMIZER
 --------------------------------------------------
 
 if setfpscap then setfpscap(15) end
 pcall(function() RunService:Set3dRenderingEnabled(false) end)
 
 --------------------------------------------------
--- FORMAT TIME
+-- TIME FORMAT
 --------------------------------------------------
 
 local function formatTime(t)
@@ -32,54 +37,67 @@ local function formatTime(t)
 end
 
 --------------------------------------------------
--- LOAD DATABASE
+-- DB FILES & LOCK
 --------------------------------------------------
 
 local DB_FILE = "pawfy-farm-db.json"
-local farmDB = {}
+local LOCK_FILE = "pawfy-farm-db.lock"
 
-if isfile(DB_FILE) then
-    farmDB = HttpService:JSONDecode(readfile(DB_FILE))
+local function acquireLock()
+    while isfile(LOCK_FILE) do
+        task.wait(0.1)
+    end
+    writefile(LOCK_FILE, "1")
 end
 
-farmDB[USERNAME] = farmDB[USERNAME] or {
-    message_id = nil,
-    last_join = "",
-    last_seen = 0
-}
-
-farmDB._global_message_id = farmDB._global_message_id or nil
-
-farmDB[USERNAME].last_join = formatTime(os.time())
-farmDB[USERNAME].last_seen = os.time()
-
-writefile(DB_FILE, HttpService:JSONEncode(farmDB))
-
---------------------------------------------------
--- STATUS CHECK
---------------------------------------------------
-
-local function getStatus(userData)
-    if os.time() - userData.last_seen > 180 then
-        return "🔴 OFFLINE"
-    else
-        return "🟢 ACTIVE"
+local function releaseLock()
+    if isfile(LOCK_FILE) then
+        delfile(LOCK_FILE)
     end
 end
 
 --------------------------------------------------
--- COUNT HEALTH
+-- READ DB SAFE
 --------------------------------------------------
 
-local total = 0
-local active = 0
+local farmDB = {}
+if isfile(DB_FILE) then
+    farmDB = HttpService:JSONDecode(readfile(DB_FILE))
+end
+farmDB._global_message_id = farmDB._global_message_id or nil
+farmDB[USERNAME] = farmDB[USERNAME] or {
+    last_join = "",
+    last_seen = 0
+}
+
+-- Update self join & seen
+farmDB[USERNAME].last_join = formatTime(os.time())
+farmDB[USERNAME].last_seen = os.time()
+
+--------------------------------------------------
+-- SAVE DB SAFE
+--------------------------------------------------
+
+acquireLock()
+writefile(DB_FILE, HttpService:JSONEncode(farmDB))
+releaseLock()
+
+--------------------------------------------------
+-- BUILD GLOBAL EMBED
+--------------------------------------------------
+
+local total, active = 0, 0
+local lines = ""
 
 for user,data in pairs(farmDB) do
     if user ~= "_global_message_id" then
         total += 1
+        local status = "🔴 OFFLINE"
         if os.time() - data.last_seen <= 180 then
+            status = "🟢 ACTIVE"
             active += 1
         end
+        lines = lines.."👤 "..user.." | "..status.." | Last Join: "..data.last_join.."\n"
     end
 end
 
@@ -88,114 +106,83 @@ if total > 0 then
     health = math.floor((active/total)*100)
 end
 
-local globalColor = 5763719
 local healthStatus = "🟢 STABLE"
-
+local color = 5763719
 if health < 50 then
-    globalColor = 16711680
     healthStatus = "🔴 CRITICAL"
+    color = 16711680
 elseif health < 80 then
-    globalColor = 16776960
     healthStatus = "🟡 WARNING"
+    color = 16776960
 end
 
---------------------------------------------------
--- USER EMBED
---------------------------------------------------
-
-local userStatus = getStatus(farmDB[USERNAME])
-
-local userEmbed = {
+local embed = {
     embeds = {{
-        title = "🧊 Pawfy Farm Node",
+        title = "🚜 Pawfy Farm Controller v3.1",
         description =
-            "👤 "..USERNAME..
-            "\nStatus: "..userStatus..
-            "\nLast Join: "..farmDB[USERNAME].last_join,
-        color = userStatus == "🟢 ACTIVE" and 5763719 or 16711680
-    }}
-}
-
---------------------------------------------------
--- SEND OR EDIT USER MESSAGE
---------------------------------------------------
-
-local messageId = farmDB[USERNAME].message_id
-
-if messageId then
-    request({
-        Url = WEBHOOK_URL.."/messages/"..messageId,
-        Method = "PATCH",
-        Headers = {["Content-Type"] = "application/json"},
-        Body = HttpService:JSONEncode(userEmbed)
-    })
-else
-    local response = request({
-        Url = WEBHOOK_URL.."?wait=true",
-        Method = "POST",
-        Headers = {["Content-Type"] = "application/json"},
-        Body = HttpService:JSONEncode(userEmbed)
-    })
-    if response and response.Body then
-        local decoded = HttpService:JSONDecode(response.Body)
-        farmDB[USERNAME].message_id = decoded.id
-        writefile(DB_FILE, HttpService:JSONEncode(farmDB))
-    end
-end
-
---------------------------------------------------
--- GLOBAL EMBED
---------------------------------------------------
-
-local globalEmbed = {
-    embeds = {{
-        title = "🚜 Pawfy Farm Global",
-        description =
-            "Total Accounts: "..total..
+            "Total: "..total..
             "\nActive: "..active..
             "\nOffline: "..(total-active)..
-            "\n\nFarm Health: "..health.."%"
-            .."\nStatus: "..healthStatus,
-        color = globalColor
+            "\nFarm Health: "..health.."%"
+            .."\nStatus: "..healthStatus..
+            "\n\n----------------------\n"..lines,
+        color = color
     }}
 }
 
-local globalId = farmDB._global_message_id
+--------------------------------------------------
+-- SEND / EDIT GLOBAL MESSAGE
+--------------------------------------------------
 
-if globalId then
-    request({
-        Url = WEBHOOK_URL.."/messages/"..globalId,
-        Method = "PATCH",
-        Headers = {["Content-Type"] = "application/json"},
-        Body = HttpService:JSONEncode(globalEmbed)
-    })
-else
-    local response = request({
-        Url = WEBHOOK_URL.."?wait=true",
-        Method = "POST",
-        Headers = {["Content-Type"] = "application/json"},
-        Body = HttpService:JSONEncode(globalEmbed)
-    })
-    if response and response.Body then
-        local decoded = HttpService:JSONDecode(response.Body)
-        farmDB._global_message_id = decoded.id
-        writefile(DB_FILE, HttpService:JSONEncode(farmDB))
+local function sendOrEdit()
+    acquireLock()
+    farmDB = isfile(DB_FILE) and HttpService:JSONDecode(readfile(DB_FILE)) or {}
+    farmDB._global_message_id = farmDB._global_message_id or nil
+
+    local globalId = farmDB._global_message_id
+
+    if globalId then
+        request({
+            Url = WEBHOOK_URL.."/messages/"..globalId,
+            Method = "PATCH",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode(embed)
+        })
+    else
+        local response = request({
+            Url = WEBHOOK_URL.."?wait=true",
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode(embed)
+        })
+        if response and response.Body then
+            local decoded = HttpService:JSONDecode(response.Body)
+            farmDB._global_message_id = decoded.id
+            writefile(DB_FILE, HttpService:JSONEncode(farmDB))
+        end
     end
+    releaseLock()
 end
 
+-- Random delay 0–2 detik untuk anti race
+task.wait(math.random() * 2)
+sendOrEdit()
+
 --------------------------------------------------
--- HEARTBEAT
+-- HEARTBEAT (UPDATE LAST_SEEN)
 --------------------------------------------------
 
 task.spawn(function()
     while true do
         task.wait(60)
-        if not isfile(DB_FILE) then continue end
-        local data = HttpService:JSONDecode(readfile(DB_FILE))
+        acquireLock()
+        local data = isfile(DB_FILE) and HttpService:JSONDecode(readfile(DB_FILE)) or {}
         if data[USERNAME] then
             data[USERNAME].last_seen = os.time()
             writefile(DB_FILE, HttpService:JSONEncode(data))
         end
+        releaseLock()
+        sendOrEdit()
     end
 end)
 
