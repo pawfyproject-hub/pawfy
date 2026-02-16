@@ -1,133 +1,127 @@
--- ===================================
---        Pawfy Sys Monitor
---        Production Edition
---        INACTIVE Hide Details
--- ===================================
+--// Pawfy Project - Main Monitor (Fixed Status & Symbols)
+--// Link: https://raw.githubusercontent.com/pawfyproject-hub/pawfy/refs/heads/main/main.lua
 
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local Stats = game:GetService("Stats")
+local RunService = game:GetService("RunService")
 
-local WEBHOOK_URL = "ISI_WEBHOOK_KAMU_DISINI"
+local LocalPlayer = Players.LocalPlayer
+local request = http_request or (http and http.request) or (syn and syn.request) or request
 
-local USERNAME = Players.LocalPlayer.Name
-local START_TIME = tick()
+-- CONFIG & STATE
+local CONFIG_FILE = "pawfy-config.json"
+local WEBHOOK_NAME = "Pawfy Sys Notifier"
+local BOT_NAME = "Pawfy Sys"
+local AVATAR_URL = "https://raw.githubusercontent.com/pawfyproject-hub/pawfy/main/pawfy.jpg"
+local INTERVAL = 50 
 
-local DASHBOARD_MESSAGE_ID = nil
-local INSTANCE_DATA = {}
+local webhook
+local messageId
+local startTime = os.time()
 
-local TIMEOUT = 120 -- detik sebelum dianggap INACTIVE
-
--- ================= Utility =================
-
-local function formatUptime(sec)
-    local h = math.floor(sec/3600)
-    local m = math.floor((sec%3600)/60)
-    return string.format("%02dh %02dm", h, m)
+-- 1. LOAD CONFIG
+if isfile(CONFIG_FILE) then
+    local s, cfg = pcall(HttpService.JSONDecode, HttpService, readfile(CONFIG_FILE))
+    if s and cfg.webhook then webhook = cfg.webhook end
 end
 
-local function getMemory()
-    return math.floor(collectgarbage("count") / 1024)
-end
-
-local function getPing()
-    return Stats.Network.ServerStatsItem["Data Ping"]:GetValueString()
-end
-
-local function buildDescription()
-
-    local totalRam = 0
-    local activeCount = 0
-    local now = tick()
-
-    local desc = ""
-    desc = desc .. "╔════════════════════════════╗\n"
-    desc = desc .. "        PAWFY SYS MONITOR\n"
-    desc = desc .. "╚════════════════════════════╝\n\n"
-
-    for _, data in pairs(INSTANCE_DATA) do
-
-        if now - data.lastUpdate > TIMEOUT then
-            -- INACTIVE
-            desc = desc .. "◆ **"..data.user.."**\n"
-            desc = desc .. "   └ 🔴 INACTIVE - Last "..data.lastSeen.."\n\n"
-        else
-            -- ONLINE
-            totalRam += data.memory
-            activeCount += 1
-
-            desc = desc .. "◆ **"..data.user.."**\n"
-            desc = desc .. "   ├ Status   : 🟢 ONLINE\n"
-            desc = desc .. "   ├ Uptime   : "..data.uptime.."\n"
-            desc = desc .. "   ├ Memory   : "..data.memory.." MB\n"
-            desc = desc .. "   └ Ping     : "..data.ping.."\n\n"
+-- 2. GUI INPUT (Hanya jika belum ada config)
+if not webhook then
+    local gui = Instance.new("ScreenGui", game.CoreGui)
+    local frame = Instance.new("Frame", gui)
+    frame.Size = UDim2.fromScale(0.3, 0.2)
+    frame.Position = UDim2.fromScale(0.5, 0.5)
+    frame.AnchorPoint = Vector2.new(0.5, 0.5)
+    frame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+    
+    local box = Instance.new("TextBox", frame)
+    box.Size = UDim2.fromScale(0.8, 0.3)
+    box.Position = UDim2.fromScale(0.1, 0.2)
+    box.PlaceholderText = "Paste Webhook URL"
+    
+    local btn = Instance.new("TextButton", frame)
+    btn.Size = UDim2.fromScale(0.4, 0.3)
+    btn.Position = UDim2.fromScale(0.3, 0.6)
+    btn.Text = "SAVE"
+    
+    btn.MouseButton1Click:Connect(function()
+        if box.Text:find("discord") then
+            webhook = box.Text
+            writefile(CONFIG_FILE, HttpService:JSONEncode({webhook = webhook}))
+            gui:Destroy()
         end
-    end
-
-    desc = desc .. "────────────────────────────\n"
-    desc = desc .. "Total RAM Usage : "..totalRam.." MB\n"
-    desc = desc .. "Active Instance : "..activeCount.."\n"
-    desc = desc .. "────────────────────────────\n"
-    desc = desc .. "Pawfy Project | Last Update: "..os.date("%X")
-
-    return desc
+    end)
+    repeat task.wait() until webhook
 end
 
--- ================= Core =================
+-- 3. PAYLOAD FUNCTION (Symbol on Status Line)
+local function getPayload(is_offline)
+    local uptime_s = os.time() - startTime
+    local ping = "N/A"
+    pcall(function()
+        ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue()) .. " ms"
+    end)
 
-local function updateDashboard()
-
-    INSTANCE_DATA[USERNAME] = {
-        user = USERNAME,
-        uptime = formatUptime(tick() - START_TIME),
-        memory = getMemory(),
-        ping = getPing(),
-        lastUpdate = tick(),
-        lastSeen = os.date("%X")
-    }
-
-    local list = {}
-    for _, v in pairs(INSTANCE_DATA) do
-        table.insert(list, v)
-    end
-    INSTANCE_DATA = list
-
-    local payload = {
-        username = "Pawfy Sys Monitor",
+    return HttpService:JSONEncode({
+        username = WEBHOOK_NAME,
+        avatar_url = AVATAR_URL,
         embeds = {{
-            title = "🖥️ Pawfy Sys Monitor",
-            description = buildDescription(),
-            color = 16766720
+            title = "🖥️ " .. BOT_NAME .. " MONITOR",
+            color = is_offline and 16711680 or 65535,
+            fields = {
+                { name = "User", value = "||"..LocalPlayer.Name.."||", inline = true },
+                { name = "Status", value = is_offline and "**🔴 INACTIVE**" or "**🟢 ACTIVE**", inline = true },
+                { name = "Uptime", value = string.format("%02d:%02d:%02d", uptime_s//3600, (uptime_s%3600)//60, uptime_s%60), inline = true },
+                { name = "Memory", value = string.format("%.2f MB", Stats:GetTotalMemoryUsageMb()), inline = true },
+                { name = "Ping", value = ping, inline = true }
+            },
+            footer = { text = "Pawfy Project • Real-time Updates" },
+            timestamp = DateTime.now():ToIsoDate()
         }}
-    }
+    })
+end
 
-    if DASHBOARD_MESSAGE_ID then
-        request({
-            Url = WEBHOOK_URL.."/messages/"..DASHBOARD_MESSAGE_ID,
-            Method = "PATCH",
-            Headers = {["Content-Type"] = "application/json"},
-            Body = HttpService:JSONEncode(payload)
-        })
-    else
-        local response = request({
-            Url = WEBHOOK_URL.."?wait=true",
-            Method = "POST",
-            Headers = {["Content-Type"] = "application/json"},
-            Body = HttpService:JSONEncode(payload)
-        })
+-- 4. UPDATE LOGIC (Original Pawfy Logic)
+local function updateStatus(is_offline)
+    local url = messageId and (webhook .. "/messages/" .. messageId) or (webhook .. "?wait=true")
+    local method = messageId and "PATCH" or "POST"
 
-        if response and response.Body then
-            local data = HttpService:JSONDecode(response.Body)
-            DASHBOARD_MESSAGE_ID = data.id
-        end
+    local success, res = pcall(function()
+        return request({
+            Url = url,
+            Method = method,
+            Headers = {["Content-Type"] = "application/json"},
+            Body = getPayload(is_offline)
+        })
+    end)
+
+    if success and res and res.Body and not messageId then
+        local ok, data = pcall(HttpService.JSONDecode, HttpService, res.Body)
+        if ok and data and data.id then messageId = data.id end
     end
 end
 
--- Anti collision start
-task.wait(math.random(2,5))
+-- 5. HEARTBEAT LOOP (Looping 50s)
+task.spawn(function()
+    updateStatus(false) -- First Send
+    while task.wait(INTERVAL) do
+        -- Anti-AFK
+        pcall(function()
+            local vu = game:GetService("VirtualUser")
+            vu:CaptureController()
+            vu:ClickButton2(Vector2.new())
+        end)
+        
+        -- Update Message
+        pcall(function()
+            updateStatus(false)
+        end)
+    end
+end)
 
--- Update loop
-while true do
-    pcall(updateDashboard)
-    task.wait(60 + math.random(-10,10))
-end
+-- Offline status saat game tutup
+game:BindToClose(function()
+    updateStatus(true)
+    task.wait(1)
+end)
