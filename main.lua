@@ -1,233 +1,133 @@
---// Pawfy Central Dashboard
---// Single Message | Multi Instance | Auto Recover | Anti 429
-
-if not game:IsLoaded() then game.Loaded:Wait() end
-if getgenv().PAWFY_CENTRAL then return end
-getgenv().PAWFY_CENTRAL = true
+-- ===================================
+--        Pawfy Sys Monitor
+--        Production Edition
+--        INACTIVE Hide Details
+-- ===================================
 
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local Stats = game:GetService("Stats")
-local RunService = game:GetService("RunService")
 
-local LocalPlayer = Players.LocalPlayer
-local request = http_request or (http and http.request) or request
+local WEBHOOK_URL = "ISI_WEBHOOK_KAMU_DISINI"
 
-local CONFIG_FILE = "pawfy-config.json"
-local DASHBOARD_FILE = "pawfy-dashboard.json"
+local USERNAME = Players.LocalPlayer.Name
+local START_TIME = tick()
 
-local INTERVAL = 60
+local DASHBOARD_MESSAGE_ID = nil
+local INSTANCE_DATA = {}
 
-local webhook
-local dashboardMessageId
-local startTime = os.time()
-local sessionId = HttpService:GenerateGUID(false):sub(1,6)
+local TIMEOUT = 120 -- detik sebelum dianggap INACTIVE
 
--- =========================
--- LOAD CONFIG
--- =========================
-local function loadJSON(path)
-    if isfile and isfile(path) then
-        local ok, data = pcall(function()
-            return HttpService:JSONDecode(readfile(path))
-        end)
-        if ok then return data end
-    end
+-- ================= Utility =================
+
+local function formatUptime(sec)
+    local h = math.floor(sec/3600)
+    local m = math.floor((sec%3600)/60)
+    return string.format("%02dh %02dm", h, m)
 end
 
-local function saveJSON(path,data)
-    if writefile then
-        writefile(path,HttpService:JSONEncode(data))
-    end
+local function getMemory()
+    return math.floor(collectgarbage("count") / 1024)
 end
 
-local config = loadJSON(CONFIG_FILE)
-if config and config.webhook then
-    webhook = config.webhook
+local function getPing()
+    return Stats.Network.ServerStatsItem["Data Ping"]:GetValueString()
 end
 
-if not webhook then
-    warn("Webhook tidak ditemukan.")
-    return
-end
+local function buildDescription()
 
-local dashData = loadJSON(DASHBOARD_FILE) or {}
+    local totalRam = 0
+    local activeCount = 0
+    local now = tick()
 
-if dashData.messageId then
-    dashboardMessageId = dashData.messageId
-end
+    local desc = ""
+    desc = desc .. "╔════════════════════════════╗\n"
+    desc = desc .. "        PAWFY SYS MONITOR\n"
+    desc = desc .. "╚════════════════════════════╝\n\n"
 
--- =========================
--- SAFE REQUEST
--- =========================
-local function safeRequest(data)
-    for i=1,5 do
-        local r = request(data)
-        if not r then task.wait(2) continue end
+    for _, data in pairs(INSTANCE_DATA) do
 
-        if r.StatusCode == 200 or r.StatusCode == 204 then
-            return r
-        end
-
-        if r.StatusCode == 429 then
-            local retry = 5
-            pcall(function()
-                local body = HttpService:JSONDecode(r.Body)
-                retry = tonumber(body.retry_after) or 5
-            end)
-            task.wait(retry)
+        if now - data.lastUpdate > TIMEOUT then
+            -- INACTIVE
+            desc = desc .. "◆ **"..data.user.."**\n"
+            desc = desc .. "   └ 🔴 INACTIVE - Last "..data.lastSeen.."\n\n"
         else
-            task.wait(2)
+            -- ONLINE
+            totalRam += data.memory
+            activeCount += 1
+
+            desc = desc .. "◆ **"..data.user.."**\n"
+            desc = desc .. "   ├ Status   : 🟢 ONLINE\n"
+            desc = desc .. "   ├ Uptime   : "..data.uptime.."\n"
+            desc = desc .. "   ├ Memory   : "..data.memory.." MB\n"
+            desc = desc .. "   └ Ping     : "..data.ping.."\n\n"
         end
     end
+
+    desc = desc .. "────────────────────────────\n"
+    desc = desc .. "Total RAM Usage : "..totalRam.." MB\n"
+    desc = desc .. "Active Instance : "..activeCount.."\n"
+    desc = desc .. "────────────────────────────\n"
+    desc = desc .. "Pawfy Project | Last Update: "..os.date("%X")
+
+    return desc
 end
 
--- =========================
--- STATS
--- =========================
-local function uptime()
-    local s = os.time() - startTime
-    return string.format("%02d:%02d:%02d", s//3600, (s%3600)//60, s%60)
-end
+-- ================= Core =================
 
-local function ping()
-    local p = Stats.Network.ServerStatsItem["Data Ping"]
-    return p and math.floor(p:GetValue()).."ms" or "N/A"
-end
+local function updateDashboard()
 
-local function mem()
-    return string.format("%.0fMB", Stats:GetTotalMemoryUsageMb())
-end
+    INSTANCE_DATA[USERNAME] = {
+        user = USERNAME,
+        uptime = formatUptime(tick() - START_TIME),
+        memory = getMemory(),
+        ping = getPing(),
+        lastUpdate = tick(),
+        lastSeen = os.date("%X")
+    }
 
-local function cpu()
-    local c = Stats.PerformanceStats and Stats.PerformanceStats:FindFirstChild("CPU")
-    return c and string.format("%.0fms", c:GetValue()) or "N/A"
-end
+    local list = {}
+    for _, v in pairs(INSTANCE_DATA) do
+        table.insert(list, v)
+    end
+    INSTANCE_DATA = list
 
--- =========================
--- BUILD LINE
--- =========================
-local function buildLine()
-    return string.format(
-        "🟢 %s | CPU %s | RAM %s | Ping %s | %s",
-        LocalPlayer.Name.."#" .. sessionId,
-        cpu(),
-        mem(),
-        ping(),
-        uptime()
-    )
-end
-
--- =========================
--- CREATE DASHBOARD (AUTO RECOVER)
--- =========================
-local function createDashboard()
     local payload = {
+        username = "Pawfy Sys Monitor",
         embeds = {{
-            title = "📊 Pawfy Central Monitor",
-            description = "Initializing...",
-            color = 0x00FF00,
-            footer = {text = "Central Dashboard Mode"},
-            timestamp = DateTime.now():ToIsoDate()
+            title = "🖥️ Pawfy Sys Monitor",
+            description = buildDescription(),
+            color = 16766720
         }}
     }
 
-    local r = safeRequest({
-        Url = webhook.."?wait=true",
-        Method = "POST",
-        Headers = {["Content-Type"]="application/json"},
-        Body = HttpService:JSONEncode(payload)
-    })
+    if DASHBOARD_MESSAGE_ID then
+        request({
+            Url = WEBHOOK_URL.."/messages/"..DASHBOARD_MESSAGE_ID,
+            Method = "PATCH",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode(payload)
+        })
+    else
+        local response = request({
+            Url = WEBHOOK_URL.."?wait=true",
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode(payload)
+        })
 
-    if r and r.Body then
-        local decoded = HttpService:JSONDecode(r.Body)
-        dashboardMessageId = decoded.id
-        saveJSON(DASHBOARD_FILE,{messageId = dashboardMessageId})
-    end
-end
-
--- =========================
--- UPDATE DASHBOARD
--- =========================
-local function updateDashboard()
-    if not dashboardMessageId then
-        createDashboard()
-        return
-    end
-
-    task.wait(math.random(1,3)) -- reduce collision
-
-    local r = safeRequest({
-        Url = webhook.."/messages/"..dashboardMessageId,
-        Method = "GET"
-    })
-
-    if not r or not r.Body then
-        createDashboard()
-        return
-    end
-
-    local decoded = HttpService:JSONDecode(r.Body)
-    local oldDesc = decoded.embeds[1].description or ""
-
-    local lines = {}
-    for line in string.gmatch(oldDesc,"[^\n]+") do
-        if not line:find(LocalPlayer.Name.."#"..sessionId) then
-            table.insert(lines,line)
+        if response and response.Body then
+            local data = HttpService:JSONDecode(response.Body)
+            DASHBOARD_MESSAGE_ID = data.id
         end
     end
-
-    table.insert(lines,buildLine())
-
-    local newDesc = table.concat(lines,"\n")
-
-    safeRequest({
-        Url = webhook.."/messages/"..dashboardMessageId,
-        Method = "PATCH",
-        Headers = {["Content-Type"]="application/json"},
-        Body = HttpService:JSONEncode({
-            embeds = {{
-                title = "📊 Pawfy Central Monitor",
-                description = newDesc,
-                color = 0x00FF00,
-                footer = {text="Central Dashboard Mode"},
-                timestamp = DateTime.now():ToIsoDate()
-            }}
-        })
-    })
 end
 
--- =========================
--- LOOP
--- =========================
-RunService.Heartbeat:Connect(function()
-    if not dashboardMessageId then
-        createDashboard()
-    end
-end)
+-- Anti collision start
+task.wait(math.random(2,5))
 
-task.spawn(function()
-    while task.wait(INTERVAL) do
-        updateDashboard()
-    end
-end)
-
--- =========================
--- CLOSE DETECT
--- =========================
-game:BindToClose(function()
-    if not dashboardMessageId then return end
-
-    safeRequest({
-        Url = webhook.."/messages/"..dashboardMessageId,
-        Method = "PATCH",
-        Headers = {["Content-Type"]="application/json"},
-        Body = HttpService:JSONEncode({
-            embeds = {{
-                title = "📊 Pawfy Central Monitor",
-                description = "⚠ Instance "..LocalPlayer.Name.." left.",
-                color = 0xFF0000
-            }}
-        })
-    })
-end)
+-- Update loop
+while true do
+    pcall(updateDashboard)
+    task.wait(60 + math.random(-10,10))
+end
