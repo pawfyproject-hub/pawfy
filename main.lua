@@ -1,5 +1,5 @@
---// Pawfy Project - Professional Multi-Instance Monitor (Full Version)
---// Fitur: Auto-Sync, PATCH System, Total RAM, CPU Status, & GUI Setup
+--// Pawfy Project - Professional Multi-Instance Monitor (Full & Fixed)
+--// Fitur: Force GUI Setup, Auto-Sync, PATCH System, Total RAM & CPU Status
 
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
@@ -17,64 +17,93 @@ local INTERVAL = 50
 local webhook
 local startTime = os.time()
 
--- 1. LOAD WEBHOOK DARI FILE
-if isfile(WEBHOOK_FILE) then
-    local s, cfg = pcall(HttpService.JSONDecode, HttpService, readfile(WEBHOOK_FILE))
-    if s and cfg.webhook and cfg.webhook ~= "" then 
-        webhook = cfg.webhook 
+--// 1. FUNGSI LOAD/SAVE WEBHOOK (DIPERBAIKI)
+local function loadWebhook()
+    if isfile(WEBHOOK_FILE) then
+        local success, content = pcall(readfile, WEBHOOK_FILE)
+        if success then
+            local s, cfg = pcall(HttpService.JSONDecode, HttpService, content)
+            if s and cfg.webhook and cfg.webhook:find("discord") then
+                return cfg.webhook
+            end
+        end
     end
+    return nil
 end
 
--- 2. GUI INPUT (Muncul hanya jika Webhook Kosong)
+webhook = loadWebhook()
+
+--// 2. FORCE GUI SETUP (Jika Webhook Kosong)
 if not webhook or webhook == "" then
+    if game.CoreGui:FindFirstChild("PawfySetup") then
+        game.CoreGui.PawfySetup:Destroy()
+    end
+
     local gui = Instance.new("ScreenGui", game.CoreGui)
+    gui.Name = "PawfySetup"
+    gui.DisplayOrder = 999
+    
     local frame = Instance.new("Frame", gui)
     frame.Size = UDim2.fromScale(0.35, 0.25)
     frame.Position = UDim2.fromScale(0.5, 0.5)
     frame.AnchorPoint = Vector2.new(0.5, 0.5)
-    frame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    frame.BorderSizePixel = 0
     
+    -- Membuat sudut melengkung (UI Corner)
+    local corner = Instance.new("UICorner", frame)
+    corner.CornerRadius = UDim.new(0, 8)
+
     local label = Instance.new("TextLabel", frame)
     label.Size = UDim2.fromScale(1, 0.3)
-    label.Text = "PAWFY SYS: SETUP WEBHOOK"
-    label.TextColor3 = Color3.new(1, 1, 1)
+    label.Text = "PAWFY SYS: WEBHOOK SETUP"
+    label.TextColor3 = Color3.fromRGB(0, 255, 255)
     label.BackgroundTransparency = 1
+    label.TextScaled = true
 
     local box = Instance.new("TextBox", frame)
-    box.Size = UDim2.fromScale(0.9, 0.2)
+    box.Size = UDim2.fromScale(0.9, 0.25)
     box.Position = UDim2.fromScale(0.05, 0.35)
-    box.PlaceholderText = "Paste Discord Webhook Here"
+    box.PlaceholderText = "PASTE WEBHOOK DISINI"
     box.Text = ""
+    box.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    box.TextColor3 = Color3.new(1, 1, 1)
 
     local btn = Instance.new("TextButton", frame)
-    btn.Size = UDim2.fromScale(0.4, 0.25)
-    btn.Position = UDim2.fromScale(0.3, 0.65)
-    btn.Text = "SAVE & START"
-    btn.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
+    btn.Size = UDim2.fromScale(0.5, 0.2)
+    btn.Position = UDim2.fromScale(0.25, 0.7)
+    btn.Text = "SAVE WEBHOOK"
+    btn.BackgroundColor3 = Color3.fromRGB(0, 170, 0)
     btn.TextColor3 = Color3.new(1, 1, 1)
 
     btn.MouseButton1Click:Connect(function()
-        if box.Text:find("discord") then
-            webhook = box.Text
-            writefile(WEBHOOK_FILE, HttpService:JSONEncode({webhook = webhook}))
-            gui:Destroy()
+        local input = box.Text:gsub("%s+", "")
+        if input:find("discord.com/api/webhooks") then
+            webhook = input
+            local data = HttpService:JSONEncode({webhook = webhook})
+            local success, err = pcall(writefile, WEBHOOK_FILE, data)
+            if success then
+                gui:Destroy()
+            else
+                box.Text = ""
+                box.PlaceholderText = "ERROR WRITING FILE!"
+            end
         else
-            box.PlaceholderText = "INVALID WEBHOOK URL!"
             box.Text = ""
+            box.PlaceholderText = "LINK SALAH!"
         end
     end)
-    repeat task.wait(1) until webhook -- Menahan script agar tidak lanjut tanpa webhook
+    repeat task.wait(0.5) until webhook and webhook ~= ""
 end
 
--- 3. LOGIKA AUTO-SYNC DATA
+--// 3. LOGIKA AUTO-SYNC (DATA SEMUA AKUN)
 local function updateLocalData(is_offline)
     local allData = {}
     if isfile(DATA_PATH) then
-        local success, content = pcall(readfile, DATA_PATH)
-        if success and content ~= "" then
-            local s, decoded = pcall(HttpService.JSONDecode, HttpService, content)
-            if s then allData = decoded end
-        end
+        pcall(function()
+            local content = readfile(DATA_PATH)
+            allData = HttpService:JSONDecode(content)
+        end)
     end
 
     if is_offline then
@@ -96,16 +125,16 @@ local function updateLocalData(is_offline)
         }
     end
     
-    -- Cleanup akun tidak aktif (> 2 menit)
+    -- Hapus akun yang tidak update > 2 menit
     for name, data in pairs(allData) do
         if os.time() - data.lastUpdate > 120 then allData[name] = nil end
     end
 
-    writefile(DATA_PATH, HttpService:JSONEncode(allData))
+    pcall(writefile, DATA_PATH, HttpService:JSONEncode(allData))
     return allData
 end
 
--- 4. SEND/PATCH EMBED (Master Only)
+--// 4. MASTER SEND/PATCH SYSTEM
 local function sendGlobalEmbed(allData)
     local sortedNames = {}
     local totalRamUsed = 0
@@ -115,7 +144,7 @@ local function sendGlobalEmbed(allData)
     end
     table.sort(sortedNames)
     
-    -- Urutan alfabet pertama menjadi Master pengirim webhook
+    -- Akun Master (Alphabet Pertama)
     if sortedNames[1] ~= LocalPlayer.Name then return end
 
     local description = "👤 **User** | ⏳ **Up** | 🖥️ **CPU** | 🧠 **RAM** | 📡 **Ping**\n"
@@ -152,18 +181,17 @@ local function sendGlobalEmbed(allData)
         })
     end)
 
-    -- Simpan Message ID jika berhasil kirim POST pertama
     if success and res and not msgId then
         local ok, data = pcall(HttpService.JSONDecode, HttpService, res.Body)
         if ok and data and data.id then
             writefile(MESSAGE_ID_FILE, data.id)
         end
     elseif not success or (res and res.StatusCode == 404) then
-        pcall(function() delfile(MESSAGE_ID_FILE) end)
+        pcall(delfile, MESSAGE_ID_FILE)
     end
 end
 
--- 5. LOOPING UTAMA
+--// 5. HEARTBEAT LOOP
 task.spawn(function()
     while true do
         local data = updateLocalData(false)
@@ -180,9 +208,8 @@ task.spawn(function()
     end
 end)
 
--- Status saat offline
 game:BindToClose(function()
     updateLocalData(true)
 end)
 
-print("Pawfy Sys: Multi-Instance Monitor Ready.")
+print("Pawfy Sys: Professional Multi-Instance Loaded.")
