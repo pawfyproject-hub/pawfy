@@ -1,4 +1,4 @@
---// PAWFY ULTRA REAL EDIT DASHBOARD
+--// PAWFY STATUS ONLY DASHBOARD (ULTRA LIGHT)
 pcall(function()
 
 --------------------------------------------------
@@ -6,8 +6,6 @@ pcall(function()
 --------------------------------------------------
 
 local HttpService = game:GetService("HttpService")
-local RunService = game:GetService("RunService")
-local Stats = game:GetService("Stats")
 
 --------------------------------------------------
 -- LOAD CONFIG
@@ -30,7 +28,7 @@ if not WEBHOOK_URL then
 end
 
 --------------------------------------------------
--- PACKAGE DETECT
+-- AUTO DETECT PACKAGE
 --------------------------------------------------
 
 local PACKAGE_NAME = "com.pawfy.unknown"
@@ -42,63 +40,21 @@ for i=1,5 do
 end
 
 --------------------------------------------------
--- GLOBAL DATA TABLE
+-- GLOBAL TABLE
 --------------------------------------------------
 
-_G.PAWFY_DASHBOARD = _G.PAWFY_DASHBOARD or {}
+_G.PAWFY_STATUS = _G.PAWFY_STATUS or {}
 _G.PAWFY_MASTER = _G.PAWFY_MASTER or PACKAGE_NAME
 
 local IS_MASTER = (_G.PAWFY_MASTER == PACKAGE_NAME)
 
 --------------------------------------------------
--- FPS TRACK
---------------------------------------------------
-
-local fpsCurrent = 0
-local fpsAvg = 0
-local fpsMin = 999
-local fpsMax = 0
-local frameCount = 0
-local totalFps = 0
-local startTime = tick()
-
-RunService.Heartbeat:Connect(function(dt)
-    local fps = math.floor(1/dt)
-    fpsCurrent = fps
-
-    frameCount += 1
-    totalFps += fps
-
-    if fps < fpsMin then fpsMin = fps end
-    if fps > fpsMax then fpsMax = fps end
-
-    fpsAvg = math.floor(totalFps/frameCount)
-end)
-
---------------------------------------------------
--- FORMAT UPTIME
---------------------------------------------------
-
-local function formatUptime(sec)
-    local m = math.floor(sec/60)
-    local h = math.floor(m/60)
-    local mm = m%60
-    return string.format("%02d:%02d", h, mm)
-end
-
---------------------------------------------------
--- UPDATE LOCAL DATA
+-- HEARTBEAT UPDATE (LOCAL INSTANCE)
 --------------------------------------------------
 
 task.spawn(function()
     while true do
-        _G.PAWFY_DASHBOARD[PACKAGE_NAME] = {
-            uptime = formatUptime(tick()-startTime),
-            fps = fpsCurrent,
-            avg = fpsAvg,
-            min = fpsMin,
-            max = fpsMax,
-            memory = math.floor(Stats:GetTotalMemoryUsageMb()),
+        _G.PAWFY_STATUS[PACKAGE_NAME] = {
             lastSeen = tick()
         }
         task.wait(5)
@@ -106,7 +62,7 @@ task.spawn(function()
 end)
 
 --------------------------------------------------
--- DISCORD MESSAGE ID
+-- LOAD MESSAGE ID
 --------------------------------------------------
 
 local MESSAGE_ID = nil
@@ -126,33 +82,28 @@ local function buildEmbed()
 
     local fields = {}
     local now = tick()
+    local hasOffline = false
 
-    for name,data in pairs(_G.PAWFY_DASHBOARD) do
+    for name,data in pairs(_G.PAWFY_STATUS) do
 
         local status = "🟢 ONLINE"
-        local colorEmoji = "🟢"
 
         if now - data.lastSeen > 90 then
             status = "🔴 OFFLINE"
-            colorEmoji = "🔴"
+            hasOffline = true
         end
 
         table.insert(fields,{
-            name = colorEmoji.." "..name,
-            value =
-                "Status: "..status..
-                "\nUptime: "..data.uptime..
-                "\nFPS: "..data.fps.." (avg "..data.avg..")"..
-                "\nMin/Max: "..data.min.."/"..data.max..
-                "\nMemory: "..data.memory.." MB",
-            inline = false
+            name = name,
+            value = status,
+            inline = true
         })
     end
 
     return {
         embeds = {{
-            title = "🧊 Pawfy Cloudphone Dashboard",
-            color = 3447003,
+            title = "🧊 Pawfy Instance Status",
+            color = hasOffline and 16711680 or 5763719,
             fields = fields,
             footer = {
                 text = "Realtime Edit • Offline Detect 90s"
@@ -170,7 +121,6 @@ local function sendOrEdit()
     local payload = buildEmbed()
 
     if MESSAGE_ID then
-        -- EDIT EXISTING MESSAGE
         request({
             Url = WEBHOOK_URL.."/messages/"..MESSAGE_ID,
             Method = "PATCH",
@@ -178,7 +128,6 @@ local function sendOrEdit()
             Body = HttpService:JSONEncode(payload)
         })
     else
-        -- SEND FIRST MESSAGE
         local response = request({
             Url = WEBHOOK_URL.."?wait=true",
             Method = "POST",
@@ -197,14 +146,14 @@ local function sendOrEdit()
 end
 
 --------------------------------------------------
--- MASTER LOOP (REAL EDIT 30M)
+-- MASTER LOOP (REAL EDIT)
 --------------------------------------------------
 
 if IS_MASTER then
     task.spawn(function()
         while true do
             sendOrEdit()
-            task.wait(1800) -- 30 menit
+            task.wait(1800) -- update tiap 30 menit
         end
     end)
 end
