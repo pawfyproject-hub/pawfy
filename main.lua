@@ -1,4 +1,4 @@
---// Pawfy Sys - Clean Multi Instance Final (Fixed Auto-Load)
+--// Pawfy Sys - Clean Multi Instance Final (Fixed)
 --// Author: Pawfy Project
 
 -- SERVICES
@@ -26,7 +26,7 @@ for _, v in pairs(Lighting:GetChildren()) do
     end
 end
 
--- FILES (Pastikan nama file sama dengan versi lama agar terbaca)
+-- FILES
 local CONFIG_FILE = "pawfy-config.json"
 local SESSION_FILE = "pawfy-session.json"
 
@@ -43,7 +43,7 @@ local startTime = os.time()
 local lastTick = os.clock()
 
 -- =========================
--- CONFIG LOGIC (AUTO LOAD)
+-- CONFIG LOGIC
 -- =========================
 local function loadConfig()
     if isfile and isfile(CONFIG_FILE) then
@@ -59,20 +59,17 @@ local function saveConfig(data)
     end
 end
 
--- Cek apakah ada config lama
 local cfg = loadConfig()
 if cfg and cfg.webhook and cfg.webhook ~= "" then
     webhook = cfg.webhook
-    print("Pawfy Sys: Webhook loaded from config!")
 end
 
 -- =========================
--- GUI INPUT (Hanya muncul jika benar-benar kosong)
+-- GUI INPUT
 -- =========================
 if not webhook then
     local gui = Instance.new("ScreenGui", game.CoreGui)
     gui.Name = "PawfySysGui"
-
     local frame = Instance.new("Frame", gui)
     frame.Size = UDim2.fromScale(0.45, 0.3)
     frame.Position = UDim2.fromScale(0.5, 0.5)
@@ -86,7 +83,6 @@ if not webhook then
     box.PlaceholderText = "Paste Discord Webhook URL"
     box.BackgroundColor3 = Color3.fromRGB(30,30,30)
     box.TextColor3 = Color3.new(1,1,1)
-    box.TextSize = 16
     Instance.new("UICorner", box).CornerRadius = UDim.new(0, 14)
 
     local btn = Instance.new("TextButton", frame)
@@ -103,74 +99,86 @@ if not webhook then
             gui:Destroy()
         end
     end)
-
     repeat task.wait() until webhook
 end
 
 -- =========================
--- WEBHOOK PAYLOAD & SEND
+-- PAYLOAD (FIXED SYMBOL & STATUS)
 -- =========================
-local function payload(status_text)
-    local p = Stats.Network.ServerStatsItem["Data Ping"]
-    local pingVal = p and math.floor(p:GetValue()) .. " ms" or "N/A"
+local function payload(is_offline)
+    local status_symbol = is_offline and "🔴" or "🟢"
+    local status_text = is_offline and "INACTIVE" or "ACTIVE"
+    local color = is_offline and 0xFF0000 or 0x00E5FF
+    
+    local uptime_s = os.time() - startTime
+    local uptime_str = string.format("%02d:%02d:%02d", uptime_s//3600, (uptime_s%3600)//60, uptime_s%60)
     
     return {
         username = WEBHOOK_NAME,
         avatar_url = AVATAR_URL,
         embeds = {{
-            title = "🖥️ " .. BOT_NAME .. " MONITOR",
-            color = (status_text == "OFFLINE" and 0xFF0000 or 0x00E5FF),
+            title = status_symbol .. " " .. BOT_NAME .. " MONITOR",
+            color = color,
             fields = {
                 { name = "User", value = "||"..LocalPlayer.Name.."||", inline = true },
-                { name = "Uptime", value = string.format("%02d:%02d:%02d", (os.time()-startTime)//3600, ((os.time()-startTime)%3600)//60, (os.time()-startTime)%60), inline = true },
+                { name = "Status", value = "**" .. status_text .. "**", inline = true },
+                { name = "Uptime", value = uptime_str, inline = true },
                 { name = "RAM", value = string.format("%.2f MB", Stats:GetTotalMemoryUsageMb()), inline = true },
-                { name = "Ping", value = pingVal, inline = true },
-                { name = "Status", value = status_text or "RUNNING", inline = true }
+                { name = "Ping", value = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue()) .. " ms", inline = true }
             },
-            footer = { text = "Pawfy Project • Cloudphone Optimized" },
+            footer = { text = "Pawfy Project • Cloudphone System" },
             timestamp = DateTime.now():ToIsoDate()
         }}
     }
 end
 
-local function send(is_closing)
+-- =========================
+-- WEBHOOK SEND / EDIT
+-- =========================
+local function send(is_offline)
     local url = messageId and (webhook .. "/messages/" .. messageId) or (webhook .. "?wait=true")
     local method = messageId and "PATCH" or "POST"
 
-    local r = request({
-        Url = url,
-        Method = method,
-        Headers = {["Content-Type"]="application/json"},
-        Body = HttpService:JSONEncode(payload(is_closing and "OFFLINE"))
-    })
+    local success, r = pcall(function()
+        return request({
+            Url = url,
+            Method = method,
+            Headers = {["Content-Type"]="application/json"},
+            Body = HttpService:JSONEncode(payload(is_offline))
+        })
+    end)
     
-    if r and r.Body and not messageId then
+    -- Pastikan ID pesan disimpan untuk keperluan PATCH (Edit)
+    if success and r and r.Body and not messageId then
         local data = HttpService:JSONDecode(r.Body)
-        messageId = data.id
+        if data and data.id then
+            messageId = data.id
+        end
     end
 end
 
 -- =========================
 -- MAIN LOOPS
 -- =========================
-send()
+send(false) -- Kirim status ACTIVE pertama kali
 
 RunService.Heartbeat:Connect(function()
     if os.clock() - lastTick >= INTERVAL then
         lastTick = os.clock()
         
-        -- Anti-AFK & Mem Clean
+        -- Anti-AFK & Memory Cleanup
         local vu = game:GetService("VirtualUser")
         vu:CaptureController()
         vu:ClickButton2(Vector2.new())
         if collectgarbage then collectgarbage("collect") end
         
-        pcall(function() send() end)
+        -- Jalankan Edit Status
+        pcall(function() send(false) end)
     end
 end)
 
 game:BindToClose(function()
-    send(true)
+    send(true) -- Kirim status INACTIVE merah saat keluar
     task.wait(2)
 end)
 
