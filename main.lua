@@ -1,127 +1,85 @@
---// Pawfy Bot Notifier - Clean Multi Instance Final
---// Author: Pawfy Project
+--// Pawfy Central Dashboard
+--// Single Message | Multi Instance | Auto Recover | Anti 429
 
--- SERVICES
+if not game:IsLoaded() then game.Loaded:Wait() end
+if getgenv().PAWFY_CENTRAL then return end
+getgenv().PAWFY_CENTRAL = true
+
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local Stats = game:GetService("Stats")
 local RunService = game:GetService("RunService")
-local StarterGui = game:GetService("StarterGui")
 
 local LocalPlayer = Players.LocalPlayer
 local request = http_request or (http and http.request) or request
 
--- FILES
 local CONFIG_FILE = "pawfy-config.json"
-local SESSION_FILE = "pawfy-session.json"
+local DASHBOARD_FILE = "pawfy-dashboard.json"
 
--- CONSTANTS
-local WEBHOOK_NAME = "Paw-Webhook"
-local BOT_NAME = "Pawfy Bot Notifier"
-local AVATAR_URL = "https://raw.githubusercontent.com/pawfyproject-hub/pawfy/main/pawfy.jpg"
-local INTERVAL = 50 -- 1 menit
+local INTERVAL = 60
 
--- STATE
 local webhook
-local messageId
+local dashboardMessageId
 local startTime = os.time()
-local lastTick = os.clock()
+local sessionId = HttpService:GenerateGUID(false):sub(1,6)
 
 -- =========================
--- SESSION (UNIK PER INSTANCE)
+-- LOAD CONFIG
 -- =========================
-local session
-if isfile and isfile(SESSION_FILE) then
-    session = HttpService:JSONDecode(readfile(SESSION_FILE))
-else
-    session = { id = HttpService:GenerateGUID(false) }
-    writefile(SESSION_FILE, HttpService:JSONEncode(session))
-end
-
--- =========================
--- NOTIFY (POPUP - ONLY UI)
--- =========================
-local function notify(t, d)
-    pcall(function()
-        StarterGui:SetCore("SendNotification", {
-            Title = BOT_NAME,
-            Text = t,
-            Duration = d or 4
-        })
-    end)
-end
-
--- =========================
--- CONFIG
--- =========================
-local function loadConfig()
-    if isfile and isfile(CONFIG_FILE) then
-        return HttpService:JSONDecode(readfile(CONFIG_FILE))
+local function loadJSON(path)
+    if isfile and isfile(path) then
+        local ok, data = pcall(function()
+            return HttpService:JSONDecode(readfile(path))
+        end)
+        if ok then return data end
     end
 end
 
-local function saveConfig(data)
-    writefile(CONFIG_FILE, HttpService:JSONEncode(data))
+local function saveJSON(path,data)
+    if writefile then
+        writefile(path,HttpService:JSONEncode(data))
+    end
 end
 
-local cfg = loadConfig()
-if cfg and cfg.webhook then
-    webhook = cfg.webhook
+local config = loadJSON(CONFIG_FILE)
+if config and config.webhook then
+    webhook = config.webhook
 end
 
--- =========================
--- GUI INPUT WEBHOOK
--- =========================
 if not webhook then
-    local gui = Instance.new("ScreenGui", game.CoreGui)
-    gui.Name = "PawfyWebhookGui"
+    warn("Webhook tidak ditemukan.")
+    return
+end
 
-    local frame = Instance.new("Frame", gui)
-    frame.Size = UDim2.fromScale(0.45, 0.3)
-    frame.Position = UDim2.fromScale(0.5, 0.5)
-    frame.AnchorPoint = Vector2.new(0.5, 0.5)
-    frame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 20)
+local dashData = loadJSON(DASHBOARD_FILE) or {}
 
-    local title = Instance.new("TextLabel", frame)
-    title.Size = UDim2.fromScale(1, 0.3)
-    title.BackgroundTransparency = 1
-    title.Text = "Pawfy Bot Notifier"
-    title.TextColor3 = Color3.new(1,1,1)
-    title.Font = Enum.Font.GothamBold
-    title.TextSize = 24
+if dashData.messageId then
+    dashboardMessageId = dashData.messageId
+end
 
-    local box = Instance.new("TextBox", frame)
-    box.Size = UDim2.fromScale(0.9, 0.25)
-    box.Position = UDim2.fromScale(0.05, 0.4)
-    box.PlaceholderText = "Paste Discord Webhook URL"
-    box.BackgroundColor3 = Color3.fromRGB(30,30,30)
-    box.TextColor3 = Color3.new(1,1,1)
-    box.Font = Enum.Font.Gotham
-    box.TextSize = 16
-    box.ClearTextOnFocus = false
-    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 14)
+-- =========================
+-- SAFE REQUEST
+-- =========================
+local function safeRequest(data)
+    for i=1,5 do
+        local r = request(data)
+        if not r then task.wait(2) continue end
 
-    local btn = Instance.new("TextButton", frame)
-    btn.Size = UDim2.fromScale(0.4, 0.2)
-    btn.Position = UDim2.fromScale(0.3, 0.7)
-    btn.Text = "SAVE"
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 18
-    btn.TextColor3 = Color3.new(1,1,1)
-    btn.BackgroundColor3 = Color3.fromRGB(0,200,255)
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 14)
-
-    btn.MouseButton1Click:Connect(function()
-        if box.Text:find("discord.com/api/webhooks") then
-            webhook = box.Text
-            saveConfig({ webhook = webhook })
-            notify("Webhook saved", 3)
-            gui:Destroy()
+        if r.StatusCode == 200 or r.StatusCode == 204 then
+            return r
         end
-    end)
 
-    repeat task.wait() until webhook
+        if r.StatusCode == 429 then
+            local retry = 5
+            pcall(function()
+                local body = HttpService:JSONDecode(r.Body)
+                retry = tonumber(body.retry_after) or 5
+            end)
+            task.wait(retry)
+        else
+            task.wait(2)
+        end
+    end
 end
 
 -- =========================
@@ -134,74 +92,142 @@ end
 
 local function ping()
     local p = Stats.Network.ServerStatsItem["Data Ping"]
-    return p and math.floor(p:GetValue()) .. " ms" or "N/A"
+    return p and math.floor(p:GetValue()).."ms" or "N/A"
 end
 
 local function mem()
-    return string.format("%.2f MB", Stats:GetTotalMemoryUsageMb())
+    return string.format("%.0fMB", Stats:GetTotalMemoryUsageMb())
 end
 
 local function cpu()
     local c = Stats.PerformanceStats and Stats.PerformanceStats:FindFirstChild("CPU")
-    return c and string.format("%.2f ms", c:GetValue()) or "N/A"
+    return c and string.format("%.0fms", c:GetValue()) or "N/A"
 end
 
 -- =========================
--- PAYLOAD
+-- BUILD LINE
 -- =========================
-local function payload()
-    return {
-        username = WEBHOOK_NAME,
-        avatar_url = AVATAR_URL,
+local function buildLine()
+    return string.format(
+        "🟢 %s | CPU %s | RAM %s | Ping %s | %s",
+        LocalPlayer.Name.."#" .. sessionId,
+        cpu(),
+        mem(),
+        ping(),
+        uptime()
+    )
+end
+
+-- =========================
+-- CREATE DASHBOARD (AUTO RECOVER)
+-- =========================
+local function createDashboard()
+    local payload = {
         embeds = {{
-            title = BOT_NAME,
-            color = 0x00E5FF,
-            fields = {
-                { name = "User", value = LocalPlayer.Name, inline = true },
-                { name = "Uptime", value = uptime(), inline = true },
-                { name = "Memory", value = mem(), inline = true },
-                { name = "CPU", value = cpu(), inline = true },
-                { name = "Ping", value = ping(), inline = true }
-            },
-            footer = { text = "Pawfy Project" },
+            title = "📊 Pawfy Central Monitor",
+            description = "Initializing...",
+            color = 0x00FF00,
+            footer = {text = "Central Dashboard Mode"},
             timestamp = DateTime.now():ToIsoDate()
         }}
     }
-end
 
--- =========================
--- WEBHOOK SEND / EDIT
--- =========================
-local function send()
-    local r = request({
-        Url = webhook .. "?wait=true",
+    local r = safeRequest({
+        Url = webhook.."?wait=true",
         Method = "POST",
         Headers = {["Content-Type"]="application/json"},
-        Body = HttpService:JSONEncode(payload())
+        Body = HttpService:JSONEncode(payload)
     })
+
     if r and r.Body then
-        messageId = HttpService:JSONDecode(r.Body).id
+        local decoded = HttpService:JSONDecode(r.Body)
+        dashboardMessageId = decoded.id
+        saveJSON(DASHBOARD_FILE,{messageId = dashboardMessageId})
     end
 end
 
-local function edit()
-    if not messageId then return end
-    request({
-        Url = webhook .. "/messages/" .. messageId,
+-- =========================
+-- UPDATE DASHBOARD
+-- =========================
+local function updateDashboard()
+    if not dashboardMessageId then
+        createDashboard()
+        return
+    end
+
+    task.wait(math.random(1,3)) -- reduce collision
+
+    local r = safeRequest({
+        Url = webhook.."/messages/"..dashboardMessageId,
+        Method = "GET"
+    })
+
+    if not r or not r.Body then
+        createDashboard()
+        return
+    end
+
+    local decoded = HttpService:JSONDecode(r.Body)
+    local oldDesc = decoded.embeds[1].description or ""
+
+    local lines = {}
+    for line in string.gmatch(oldDesc,"[^\n]+") do
+        if not line:find(LocalPlayer.Name.."#"..sessionId) then
+            table.insert(lines,line)
+        end
+    end
+
+    table.insert(lines,buildLine())
+
+    local newDesc = table.concat(lines,"\n")
+
+    safeRequest({
+        Url = webhook.."/messages/"..dashboardMessageId,
         Method = "PATCH",
         Headers = {["Content-Type"]="application/json"},
-        Body = HttpService:JSONEncode(payload())
+        Body = HttpService:JSONEncode({
+            embeds = {{
+                title = "📊 Pawfy Central Monitor",
+                description = newDesc,
+                color = 0x00FF00,
+                footer = {text="Central Dashboard Mode"},
+                timestamp = DateTime.now():ToIsoDate()
+            }}
+        })
     })
 end
 
 -- =========================
--- INIT
+-- LOOP
 -- =========================
-send()
-
 RunService.Heartbeat:Connect(function()
-    if os.clock() - lastTick >= INTERVAL then
-        lastTick = os.clock()
-        edit()
+    if not dashboardMessageId then
+        createDashboard()
     end
+end)
+
+task.spawn(function()
+    while task.wait(INTERVAL) do
+        updateDashboard()
+    end
+end)
+
+-- =========================
+-- CLOSE DETECT
+-- =========================
+game:BindToClose(function()
+    if not dashboardMessageId then return end
+
+    safeRequest({
+        Url = webhook.."/messages/"..dashboardMessageId,
+        Method = "PATCH",
+        Headers = {["Content-Type"]="application/json"},
+        Body = HttpService:JSONEncode({
+            embeds = {{
+                title = "📊 Pawfy Central Monitor",
+                description = "⚠ Instance "..LocalPlayer.Name.." left.",
+                color = 0xFF0000
+            }}
+        })
+    })
 end)
