@@ -1,0 +1,9 @@
+task.spawn(function()
+    pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/pawfyproject-hub/pawfy/refs/heads/main/Optimize.lua"))() end)
+end)
+
+task.wait(10)
+
+task.spawn(function()
+    pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/pawfyproject-hub/pawfy/refs/heads/main/main.lua"))() end)
+end)
