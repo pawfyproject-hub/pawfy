@@ -1,127 +1,139 @@
---// Pawfy Project - Main Monitor (Fixed Status & Symbols)
---// Link: https://raw.githubusercontent.com/pawfyproject-hub/pawfy/refs/heads/main/main.lua
+--// Pawfy Project - Multi Instance (PATCH Version)
+--// Satu pesan yang sama akan di-update oleh akun mana pun yang menjadi Master.
 
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local Stats = game:GetService("Stats")
-local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 local request = http_request or (http and http.request) or (syn and syn.request) or request
 
--- CONFIG & STATE
-local CONFIG_FILE = "pawfy-config.json"
-local WEBHOOK_NAME = "Pawfy Sys Notifier"
-local BOT_NAME = "Pawfy Sys"
-local AVATAR_URL = "https://raw.githubusercontent.com/pawfyproject-hub/pawfy/main/pawfy.jpg"
+-- CONFIG & SHARED FILES
+local WEBHOOK_FILE = "pawfy-webhook.json" 
+local DATA_PATH = "pawfy-multi-instance.json" 
+local MESSAGE_ID_FILE = "pawfy-message-id.txt" -- File untuk menyimpan ID pesan agar bisa di-PATCH
 local INTERVAL = 50 
 
 local webhook
-local messageId
 local startTime = os.time()
 
--- 1. LOAD CONFIG
-if isfile(CONFIG_FILE) then
-    local s, cfg = pcall(HttpService.JSONDecode, HttpService, readfile(CONFIG_FILE))
+-- 1. LOAD WEBHOOK
+if isfile(WEBHOOK_FILE) then
+    local s, cfg = pcall(HttpService.JSONDecode, HttpService, readfile(WEBHOOK_FILE))
     if s and cfg.webhook then webhook = cfg.webhook end
 end
 
--- 2. GUI INPUT (Hanya jika belum ada config)
-if not webhook then
-    local gui = Instance.new("ScreenGui", game.CoreGui)
-    local frame = Instance.new("Frame", gui)
-    frame.Size = UDim2.fromScale(0.3, 0.2)
-    frame.Position = UDim2.fromScale(0.5, 0.5)
-    frame.AnchorPoint = Vector2.new(0.5, 0.5)
-    frame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+-- 2. UPDATE SHARED DATA
+local function updateLocalData(is_offline)
+    local allData = {}
+    if isfile(DATA_PATH) then
+        pcall(function() allData = HttpService:JSONDecode(readfile(DATA_PATH)) end)
+    end
+
+    if is_offline then
+        allData[LocalPlayer.Name] = nil 
+    else
+        local cpu = "N/A"
+        pcall(function() cpu = string.format("%.1fms", Stats.PerformanceStats.CPU:GetValue()) end)
+        local ping = "N/A"
+        pcall(function() ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue()) .. "ms" end)
+        
+        local uptime_s = os.time() - startTime
+        allData[LocalPlayer.Name] = {
+            status = "🟢",
+            uptime = string.format("%02d:%02d", uptime_s//3600, (uptime_s%3600)//60),
+            cpu = cpu,
+            memValue = Stats:GetTotalMemoryUsageMb(),
+            ping = ping,
+            lastUpdate = os.time()
+        }
+    end
     
-    local box = Instance.new("TextBox", frame)
-    box.Size = UDim2.fromScale(0.8, 0.3)
-    box.Position = UDim2.fromScale(0.1, 0.2)
-    box.PlaceholderText = "Paste Webhook URL"
-    
-    local btn = Instance.new("TextButton", frame)
-    btn.Size = UDim2.fromScale(0.4, 0.3)
-    btn.Position = UDim2.fromScale(0.3, 0.6)
-    btn.Text = "SAVE"
-    
-    btn.MouseButton1Click:Connect(function()
-        if box.Text:find("discord") then
-            webhook = box.Text
-            writefile(CONFIG_FILE, HttpService:JSONEncode({webhook = webhook}))
-            gui:Destroy()
-        end
-    end)
-    repeat task.wait() until webhook
+    -- Cleanup akun mati
+    for name, data in pairs(allData) do
+        if os.time() - data.lastUpdate > 120 then allData[name] = nil end
+    end
+
+    writefile(DATA_PATH, HttpService:JSONEncode(allData))
+    return allData
 end
 
--- 3. PAYLOAD FUNCTION (Symbol on Status Line)
-local function getPayload(is_offline)
-    local uptime_s = os.time() - startTime
-    local ping = "N/A"
-    pcall(function()
-        ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue()) .. " ms"
-    end)
+-- 3. SEND/PATCH WEBHOOK
+local function sendGlobalEmbed(allData)
+    local sortedNames = {}
+    local totalRamUsed = 0
+    for name, data in pairs(allData) do 
+        table.insert(sortedNames, name) 
+        totalRamUsed = totalRamUsed + (data.memValue or 0)
+    end
+    table.sort(sortedNames)
+    
+    -- Hanya Master (urutan pertama) yang eksekusi kirim
+    if sortedNames[1] ~= LocalPlayer.Name then return end
 
-    return HttpService:JSONEncode({
-        username = WEBHOOK_NAME,
-        avatar_url = AVATAR_URL,
+    local description = "👤 **User** | ⏳ **Up** | 🖥️ **CPU** | 🧠 **RAM** | 📡 **Ping**\n"
+    description = description .. "--------------------------------------------------\n"
+    for _, name in ipairs(sortedNames) do
+        local d = allData[name]
+        description = description .. string.format("%s `||%s||` | %s | %s | %.0fMB | %s\n", 
+            d.status, name:sub(1,10), d.uptime, d.cpu, d.memValue, d.ping)
+    end
+    description = description .. "--------------------------------------------------\n"
+    description = description .. string.format("📊 **Total RAM:** **%.2f GB**", totalRamUsed/1024)
+
+    local payload = HttpService:JSONEncode({
+        username = "Pawfy Multi-Monitor",
         embeds = {{
-            title = "🖥️ " .. BOT_NAME .. " MONITOR",
-            color = is_offline and 16711680 or 65535,
-            fields = {
-                { name = "User", value = "||"..LocalPlayer.Name.."||", inline = true },
-                { name = "Status", value = is_offline and "**🔴 INACTIVE**" or "**🟢 ACTIVE**", inline = true },
-                { name = "Uptime", value = string.format("%02d:%02d:%02d", uptime_s//3600, (uptime_s%3600)//60, uptime_s%60), inline = true },
-                { name = "Memory", value = string.format("%.2f MB", Stats:GetTotalMemoryUsageMb()), inline = true },
-                { name = "Ping", value = ping, inline = true }
-            },
-            footer = { text = "Pawfy Project • Real-time Updates" },
+            title = "🖥️ PAWFY SYS MULTI-MONITOR",
+            color = 65535,
+            description = description,
+            footer = { text = "Pawfy Project • " .. #sortedNames .. " Instances Active" },
             timestamp = DateTime.now():ToIsoDate()
         }}
     })
-end
 
--- 4. UPDATE LOGIC (Original Pawfy Logic)
-local function updateStatus(is_offline)
-    local url = messageId and (webhook .. "/messages/" .. messageId) or (webhook .. "?wait=true")
-    local method = messageId and "PATCH" or "POST"
+    -- LOGIKA PATCH: Ambil ID dari file
+    local msgId = isfile(MESSAGE_ID_FILE) and readfile(MESSAGE_ID_FILE) or nil
+    local url = msgId and (webhook .. "/messages/" .. msgId) or (webhook .. "?wait=true")
+    local method = msgId and "PATCH" or "POST"
 
     local success, res = pcall(function()
         return request({
             Url = url,
             Method = method,
             Headers = {["Content-Type"] = "application/json"},
-            Body = getPayload(is_offline)
+            Body = payload
         })
     end)
 
-    if success and res and res.Body and not messageId then
+    -- Jika POST baru, simpan ID-nya untuk PATCH berikutnya
+    if success and res and not msgId then
         local ok, data = pcall(HttpService.JSONDecode, HttpService, res.Body)
-        if ok and data and data.id then messageId = data.id end
+        if ok and data and data.id then
+            writefile(MESSAGE_ID_FILE, data.id)
+        end
+    elseif not success or (res and res.StatusCode == 404) then
+        -- Jika gagal PATCH (pesan dihapus), hapus file ID agar buat pesan baru di loop depan
+        delfile(MESSAGE_ID_FILE)
     end
 end
 
--- 5. HEARTBEAT LOOP (Looping 50s)
+-- 4. MAIN LOOP
 task.spawn(function()
-    updateStatus(false) -- First Send
-    while task.wait(INTERVAL) do
+    while true do
+        local data = updateLocalData(false)
+        sendGlobalEmbed(data)
+        
         -- Anti-AFK
         pcall(function()
-            local vu = game:GetService("VirtualUser")
-            vu:CaptureController()
-            vu:ClickButton2(Vector2.new())
+            game:GetService("VirtualUser"):CaptureController()
+            game:GetService("VirtualUser"):ClickButton2(Vector2.new())
         end)
         
-        -- Update Message
-        pcall(function()
-            updateStatus(false)
-        end)
+        task.wait(INTERVAL)
     end
 end)
 
--- Offline status saat game tutup
 game:BindToClose(function()
-    updateStatus(true)
-    task.wait(1)
+    updateLocalData(true)
 end)
