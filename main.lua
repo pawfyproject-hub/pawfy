@@ -1,5 +1,5 @@
---// Pawfy Sys - Optimized for Cloudphone
---// Author: Pawfy (YourPaw)
+--// Pawfy Sys - Clean Multi Instance Final (Fixed Auto-Load)
+--// Author: Pawfy Project
 
 -- SERVICES
 local HttpService = game:GetService("HttpService")
@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local request = http_request or (http and http.request) or request
 
 -- =========================
--- 0. INSTANT OPTIMIZATION (CPU/RAM)
+-- 0. INSTANT OPTIMIZATION
 -- =========================
 if setfpscap then setfpscap(15) end
 RunService:Set3dRenderingEnabled(false)
@@ -26,15 +26,15 @@ for _, v in pairs(Lighting:GetChildren()) do
     end
 end
 
--- FILES
-local CONFIG_FILE = "pawfy-sys-config.json"
-local SESSION_FILE = "pawfy-sys-session.json"
+-- FILES (Pastikan nama file sama dengan versi lama agar terbaca)
+local CONFIG_FILE = "pawfy-config.json"
+local SESSION_FILE = "pawfy-session.json"
 
 -- CONSTANTS
 local WEBHOOK_NAME = "Pawfy Sys Notifier"
 local BOT_NAME = "Pawfy Sys"
 local AVATAR_URL = "https://raw.githubusercontent.com/pawfyproject-hub/pawfy/main/pawfy.jpg"
-local INTERVAL = 60 
+local INTERVAL = 50 
 
 -- STATE
 local webhook
@@ -43,29 +43,36 @@ local startTime = os.time()
 local lastTick = os.clock()
 
 -- =========================
--- SESSION & CONFIG
+-- CONFIG LOGIC (AUTO LOAD)
 -- =========================
 local function loadConfig()
     if isfile and isfile(CONFIG_FILE) then
-        return HttpService:JSONDecode(readfile(CONFIG_FILE))
+        local content = readfile(CONFIG_FILE)
+        local success, data = pcall(HttpService.JSONDecode, HttpService, content)
+        return success and data or nil
     end
 end
 
 local function saveConfig(data)
-    writefile(CONFIG_FILE, HttpService:JSONEncode(data))
+    if writefile then 
+        writefile(CONFIG_FILE, HttpService:JSONEncode(data)) 
+    end
 end
 
+-- Cek apakah ada config lama
 local cfg = loadConfig()
-if cfg and cfg.webhook then
+if cfg and cfg.webhook and cfg.webhook ~= "" then
     webhook = cfg.webhook
+    print("Pawfy Sys: Webhook loaded from config!")
 end
 
 -- =========================
--- GUI INPUT WEBHOOK
+-- GUI INPUT (Hanya muncul jika benar-benar kosong)
 -- =========================
 if not webhook then
     local gui = Instance.new("ScreenGui", game.CoreGui)
     gui.Name = "PawfySysGui"
+
     local frame = Instance.new("Frame", gui)
     frame.Size = UDim2.fromScale(0.45, 0.3)
     frame.Position = UDim2.fromScale(0.5, 0.5)
@@ -79,14 +86,13 @@ if not webhook then
     box.PlaceholderText = "Paste Discord Webhook URL"
     box.BackgroundColor3 = Color3.fromRGB(30,30,30)
     box.TextColor3 = Color3.new(1,1,1)
-    box.Font = Enum.Font.Gotham
     box.TextSize = 16
     Instance.new("UICorner", box).CornerRadius = UDim.new(0, 14)
 
     local btn = Instance.new("TextButton", frame)
     btn.Size = UDim2.fromScale(0.4, 0.2)
     btn.Position = UDim2.fromScale(0.3, 0.7)
-    btn.Text = "SAVE & START"
+    btn.Text = "SAVE"
     btn.BackgroundColor3 = Color3.fromRGB(0,200,255)
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 14)
 
@@ -97,32 +103,31 @@ if not webhook then
             gui:Destroy()
         end
     end)
+
     repeat task.wait() until webhook
 end
 
 -- =========================
--- STATS & PAYLOAD
+-- WEBHOOK PAYLOAD & SEND
 -- =========================
-local function uptime()
-    local s = os.time() - startTime
-    return string.format("%02d:%02d:%02d", s//3600, (s%3600)//60, s%60)
-end
-
 local function payload(status_text)
+    local p = Stats.Network.ServerStatsItem["Data Ping"]
+    local pingVal = p and math.floor(p:GetValue()) .. " ms" or "N/A"
+    
     return {
         username = WEBHOOK_NAME,
         avatar_url = AVATAR_URL,
         embeds = {{
             title = "🖥️ " .. BOT_NAME .. " MONITOR",
-            description = "Status: **" .. (status_text or "ACTIVE") .. "**",
             color = (status_text == "OFFLINE" and 0xFF0000 or 0x00E5FF),
             fields = {
                 { name = "User", value = "||"..LocalPlayer.Name.."||", inline = true },
-                { name = "Uptime", value = uptime(), inline = true },
-                { name = "RAM Usage", value = string.format("%.2f MB", Stats:GetTotalMemoryUsageMb()), inline = true },
-                { name = "Mode", value = "Low Resource (15 FPS)", inline = true }
+                { name = "Uptime", value = string.format("%02d:%02d:%02d", (os.time()-startTime)//3600, ((os.time()-startTime)%3600)//60, (os.time()-startTime)%60), inline = true },
+                { name = "RAM", value = string.format("%.2f MB", Stats:GetTotalMemoryUsageMb()), inline = true },
+                { name = "Ping", value = pingVal, inline = true },
+                { name = "Status", value = status_text or "RUNNING", inline = true }
             },
-            footer = { text = "Pawfy Project • Optimizer Active" },
+            footer = { text = "Pawfy Project • Cloudphone Optimized" },
             timestamp = DateTime.now():ToIsoDate()
         }}
     }
@@ -140,25 +145,25 @@ local function send(is_closing)
     })
     
     if r and r.Body and not messageId then
-        local decoded = HttpService:JSONDecode(r.Body)
-        messageId = decoded.id
+        local data = HttpService:JSONDecode(r.Body)
+        messageId = data.id
     end
 end
 
 -- =========================
--- INIT & LOOPS
+-- MAIN LOOPS
 -- =========================
-send() 
+send()
 
 RunService.Heartbeat:Connect(function()
     if os.clock() - lastTick >= INTERVAL then
         lastTick = os.clock()
-        if collectgarbage then collectgarbage("collect") end
         
-        -- Anti-AFK
+        -- Anti-AFK & Mem Clean
         local vu = game:GetService("VirtualUser")
         vu:CaptureController()
         vu:ClickButton2(Vector2.new())
+        if collectgarbage then collectgarbage("collect") end
         
         pcall(function() send() end)
     end
@@ -169,9 +174,7 @@ game:BindToClose(function()
     task.wait(2)
 end)
 
--- =========================
--- LOAD MAIN SCRIPT
--- =========================
+-- LOAD AUTOFARM
 task.spawn(function()
     pcall(function()
         loadstring(game:HttpGet("https://raw.githubusercontent.com/pawfyproject-hub/pawfy/refs/heads/main/main.lua"))()
