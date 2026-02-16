@@ -1,5 +1,5 @@
---// Pawfy Project - Multi Instance (PATCH Version)
---// Satu pesan yang sama akan di-update oleh akun mana pun yang menjadi Master.
+--// Pawfy Project - Multi Instance (Auto-Sync & PATCH)
+--// Link: https://raw.githubusercontent.com/pawfyproject-hub/pawfy/refs/heads/main/main.lua
 
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
@@ -11,7 +11,7 @@ local request = http_request or (http and http.request) or (syn and syn.request)
 -- CONFIG & SHARED FILES
 local WEBHOOK_FILE = "pawfy-webhook.json" 
 local DATA_PATH = "pawfy-multi-instance.json" 
-local MESSAGE_ID_FILE = "pawfy-message-id.txt" -- File untuk menyimpan ID pesan agar bisa di-PATCH
+local MESSAGE_ID_FILE = "pawfy-message-id.txt" 
 local INTERVAL = 50 
 
 local webhook
@@ -23,13 +23,22 @@ if isfile(WEBHOOK_FILE) then
     if s and cfg.webhook then webhook = cfg.webhook end
 end
 
--- 2. UPDATE SHARED DATA
+-- 2. LOGIKA AUTO-SYNC (Mencegah Data Hilang)
 local function updateLocalData(is_offline)
     local allData = {}
+    
+    -- Baca data yang sudah ada milik akun lain
     if isfile(DATA_PATH) then
-        pcall(function() allData = HttpService:JSONDecode(readfile(DATA_PATH)) end)
+        local success, content = pcall(readfile, DATA_PATH)
+        if success and content ~= "" then
+            local s, decoded = pcall(HttpService.JSONDecode, HttpService, content)
+            if s and type(decoded) == "table" then
+                allData = decoded
+            end
+        end
     end
 
+    -- Tambahkan/Update data akun ini ke dalam tabel gabungan
     if is_offline then
         allData[LocalPlayer.Name] = nil 
     else
@@ -49,16 +58,17 @@ local function updateLocalData(is_offline)
         }
     end
     
-    -- Cleanup akun mati
+    -- Cleanup: Hapus akun yang tidak update > 2 menit
     for name, data in pairs(allData) do
         if os.time() - data.lastUpdate > 120 then allData[name] = nil end
     end
 
+    -- Simpan kembali hasil penggabungan ke file shared
     writefile(DATA_PATH, HttpService:JSONEncode(allData))
     return allData
 end
 
--- 3. SEND/PATCH WEBHOOK
+-- 3. SEND/PATCH WEBHOOK (Master Only)
 local function sendGlobalEmbed(allData)
     local sortedNames = {}
     local totalRamUsed = 0
@@ -68,7 +78,7 @@ local function sendGlobalEmbed(allData)
     end
     table.sort(sortedNames)
     
-    -- Hanya Master (urutan pertama) yang eksekusi kirim
+    -- Akun dengan nama alfabet pertama menjadi Master
     if sortedNames[1] ~= LocalPlayer.Name then return end
 
     local description = "👤 **User** | ⏳ **Up** | 🖥️ **CPU** | 🧠 **RAM** | 📡 **Ping**\n"
@@ -92,7 +102,6 @@ local function sendGlobalEmbed(allData)
         }}
     })
 
-    -- LOGIKA PATCH: Ambil ID dari file
     local msgId = isfile(MESSAGE_ID_FILE) and readfile(MESSAGE_ID_FILE) or nil
     local url = msgId and (webhook .. "/messages/" .. msgId) or (webhook .. "?wait=true")
     local method = msgId and "PATCH" or "POST"
@@ -106,19 +115,19 @@ local function sendGlobalEmbed(allData)
         })
     end)
 
-    -- Jika POST baru, simpan ID-nya untuk PATCH berikutnya
+    -- Simpan Message ID baru jika POST pertama sukses
     if success and res and not msgId then
         local ok, data = pcall(HttpService.JSONDecode, HttpService, res.Body)
         if ok and data and data.id then
             writefile(MESSAGE_ID_FILE, data.id)
         end
     elseif not success or (res and res.StatusCode == 404) then
-        -- Jika gagal PATCH (pesan dihapus), hapus file ID agar buat pesan baru di loop depan
-        delfile(MESSAGE_ID_FILE)
+        -- Reset jika pesan dihapus agar buat baru
+        pcall(function() delfile(MESSAGE_ID_FILE) end)
     end
 end
 
--- 4. MAIN LOOP
+-- 4. HEARTBEAT LOOP
 task.spawn(function()
     while true do
         local data = updateLocalData(false)
